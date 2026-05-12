@@ -1,99 +1,114 @@
 <?php
-session_start();
-require_once 'themes.php';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+require_once __DIR__ . '/themes.php';
 
-if (!isset($_SESSION['player'])) {
+// Must have a player profile to be here.
+if (empty($_SESSION['player'])) {
     header('Location: home.php');
     exit;
 }
 
-$player = $_SESSION['player'];
-$game_id = $_SESSION['game_id'];
+$player  = $_SESSION['player'];
+$game_id = $_SESSION['game_id'] ?? '';
 
-// Initialiser ou récupérer la partie
+// Must have a valid game_id.
+if ($game_id === '') {
+    header('Location: home.php');
+    exit;
+}
+
+// Initialise the game structure if it doesn't exist yet.
 if (!isset($_SESSION['games'][$game_id])) {
     $_SESSION['games'][$game_id] = [
-        'players' => [],
-        'status' => 'waiting',
-        'current_round' => 0,
-        'impostor_id' => null,
-        'word' => null,
-        'decoy_word' => null,
-        'theme' => null,
-        'turn_order' => [],
-        'current_player_index' => 0,
-        'turns_played' => [],
-        'votes' => [],
-        'game_phase' => 'lobby'
+        'players'               => [],
+        'status'                => 'waiting',
+        'game_phase'            => 'lobby',
+        'current_round'         => 0,
+        'impostor_id'           => null,
+        'word'                  => null,
+        'decoy_word'            => null,
+        'theme'                 => null,
+        'turn_order'            => [],
+        'current_player_index'  => 0,
+        'turns_played'          => [],
+        'votes'                 => [],
     ];
 }
 
 $game = &$_SESSION['games'][$game_id];
 
-// Ajouter le joueur à la partie
+// Add this player to the game if not already present.
 if (!isset($game['players'][$player['id']])) {
     if (count($game['players']) >= 8) {
         header('Location: home.php');
         exit;
     }
     $game['players'][$player['id']] = [
-        'pseudo' => $player['pseudo'],
-        'avatar' => $player['avatar'],
-        'id' => $player['id'],
-        'eliminated' => false,
-        'is_impostor' => false
+        'pseudo'      => $player['pseudo'],
+        'avatar'      => $player['avatar'],
+        'id'          => $player['id'],
+        'eliminated'  => false,
+        'is_impostor' => false,
     ];
 }
 
-// Traiter les actions du jeu
+// Handle POST actions.
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? null;
-    
+    $action = $_POST['action'] ?? '';
+
     if ($action === 'leave_game') {
         session_destroy();
         header('Location: home.php');
         exit;
     }
-    
+
     if ($action === 'start_game' && $game['status'] === 'waiting') {
         if (count($game['players']) >= 2) {
-            $game['status'] = 'playing';
+            $game['status']     = 'playing';
             $game['game_phase'] = 'theme_selection';
-            
-            // Sélectionner l'imposteur aléatoirement
+
             $player_ids = array_keys($game['players']);
+
+            // Pick a random impostor.
             $game['impostor_id'] = $player_ids[array_rand($player_ids)];
-            
-            // Initialiser les tours
+
+            // Initialise per-player turn counters and randomise turn order.
             $game['turns_played'] = array_fill_keys($player_ids, 0);
             shuffle($player_ids);
-            $game['turn_order'] = $player_ids;
-            $game['current_player_index'] = 0;
-            $game['current_round'] = 1;
+            $game['turn_order']            = $player_ids;
+            $game['current_player_index']  = 0;
+            $game['current_round']         = 1;
         }
     }
-    
-    if ($action === 'select_theme' && ($game['game_phase'] ?? 'lobby') === 'theme_selection') {
-        $theme = htmlspecialchars($_POST['theme'] ?? '', ENT_QUOTES, 'UTF-8');
+
+    if ($action === 'select_theme' && ($game['game_phase'] ?? '') === 'theme_selection') {
+        $theme = trim($_POST['theme'] ?? '');
         if (isset($GAME_THEMES[$theme])) {
-            $game['theme'] = $theme;
             $words = $GAME_THEMES[$theme];
-            
-            // Choisir un mot secret aléatoire
-            $game['word'] = $words[array_rand($words)];
-            
-            // Choisir un mot décoy aléatoire (différent du mot secret)
-            $game['decoy_word'] = $DECOY_WORDS[array_rand($DECOY_WORDS)];
-            
-            $game['game_phase'] = 'playing';
-            $game['current_round'] = 1;
-            $game['current_player_index'] = 0;
-            $game['phase_start_time'] = time();
+
+            $game['theme']                 = $theme;
+            $game['word']                  = $words[array_rand($words)];
+            $game['decoy_word']            = $DECOY_WORDS[array_rand($DECOY_WORDS)];
+            $game['game_phase']            = 'playing';
+            $game['current_round']         = 1;
+            $game['current_player_index']  = 0;
+            $game['phase_start_time']      = time();
+
+            // Transition immediately to the game page.
+            header('Location: game.php');
+            exit;
         }
     }
 }
 
-// Récupérer les données du jeu
+// If the game is already in the playing phase, go straight to game.php.
+if (($game['game_phase'] ?? 'lobby') === 'playing') {
+    header('Location: game.php');
+    exit;
+}
+
 $game_code = substr($game_id, 5);
 ?>
 <!DOCTYPE html>
@@ -161,7 +176,7 @@ $game_code = substr($game_id, 5);
                     <h2>🎯 Sélection du thème</h2>
                     <p>Le créateur doit choisir un thème. Un mot secret sera tiré aléatoirement dans la catégorie!</p>
                     
-                    <?php if ($player['id'] === reset(array_keys($game['players']))): ?>
+                    <?php $first_player_ids = array_keys($game['players']); if ($player['id'] === $first_player_ids[0]): ?>
                         <form method="POST" class="theme-form">
                             <input type="hidden" name="action" value="select_theme">
                             
@@ -207,12 +222,6 @@ $game_code = substr($game_id, 5);
                     </form>
                 </section>
 
-            <?php elseif (($game['game_phase'] ?? 'lobby') === 'playing'): ?>
-                <!-- Redirection vers le fichier de jeu -->
-                <?php 
-                    header('Location: game.php');
-                    exit;
-                ?>
             <?php endif; ?>
         </main>
     </div>

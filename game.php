@@ -1,133 +1,171 @@
 <?php
-session_start();
-require_once 'themes.php';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+require_once __DIR__ . '/themes.php';
 
-if (!isset($_SESSION['player'])) {
+// Must have a player profile.
+if (empty($_SESSION['player'])) {
     header('Location: home.php');
     exit;
 }
 
-$player = $_SESSION['player'];
-$game_id = $_SESSION['game_id'];
+$player  = $_SESSION['player'];
+$game_id = $_SESSION['game_id'] ?? '';
 
-if (!isset($_SESSION['games'][$game_id])) {
+if ($game_id === '' || !isset($_SESSION['games'][$game_id])) {
     header('Location: create-game.php');
     exit;
 }
 
 $game = &$_SESSION['games'][$game_id];
 
-// Traiter les actions du jeu
+// If the game hasn't started yet, go back to the lobby.
+if (($game['game_phase'] ?? 'lobby') === 'lobby') {
+    header('Location: create-game.php');
+    exit;
+}
+
+// Handle POST actions.
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? null;
-    
+    $action = $_POST['action'] ?? '';
+
     if ($action === 'leave_game') {
         session_destroy();
         header('Location: home.php');
         exit;
     }
-    
-    if ($action === 'submit_guess' && $game['game_phase'] === 'playing') {
-        $guess = htmlspecialchars($_POST['guess'] ?? '', ENT_QUOTES, 'UTF-8');
-        $current_player_id = $game['turn_order'][$game['current_player_index']];
-        
-        // Enregistrer le mot deviné
-        if (!isset($game['guesses'])) {
-            $game['guesses'] = [];
-        }
-        $game['guesses'][$current_player_id][] = $guess;
-        
-        // Mettre à jour les tours joués
-        $game['turns_played'][$current_player_id]++;
-        
-        // Passer au joueur suivant
-        $game['current_player_index']++;
-        $game['phase_start_time'] = time();
-        
-        // Vérifier si le tour est terminé
-        $max_turns = 2;
-        $all_done = true;
-        foreach ($game['turns_played'] as $turns) {
-            if ($turns < $max_turns) {
-                $all_done = false;
-                break;
+
+    if ($action === 'submit_guess' && ($game['game_phase'] ?? '') === 'playing') {
+        $guess = trim($_POST['guess'] ?? '');
+        if ($guess !== '') {
+            $guess = htmlspecialchars($guess, ENT_QUOTES, 'UTF-8');
+
+            $idx               = $game['current_player_index'] ?? 0;
+            $current_player_id = $game['turn_order'][$idx] ?? null;
+
+            if ($current_player_id !== null) {
+                if (!isset($game['guesses'])) {
+                    $game['guesses'] = [];
+                }
+                $game['guesses'][$current_player_id][] = $guess;
+                $game['turns_played'][$current_player_id]++;
             }
-        }
-        
-        if ($all_done) {
-            $game['game_phase'] = 'voting';
+
+            // Advance to the next player, wrapping around the turn order.
+            $total_players = count($game['turn_order']);
+            $next_idx      = ($idx + 1) % $total_players;
+
+            // Check if every player has completed the required number of rounds.
+            $max_turns = 2;
+            $all_done  = true;
+            foreach ($game['turns_played'] as $pid => $turns) {
+                if ($turns < $max_turns * ceil($game['current_round'])) {
+                    $all_done = false;
+                    break;
+                }
+            }
+
+            if ($all_done) {
+                $game['game_phase'] = 'voting';
+            } else {
+                $game['current_player_index'] = $next_idx;
+            }
+
+            $game['phase_start_time'] = time();
         }
     }
-    
-    if ($action === 'vote' && $game['game_phase'] === 'voting') {
-        $voted_for = $_POST['voted_for'] ?? null;
-        $voter_id = $_POST['voter_id'] ?? null;
-        
-        if ($voted_for && $voter_id) {
+
+    if ($action === 'vote' && ($game['game_phase'] ?? '') === 'voting') {
+        $voted_for = $_POST['voted_for'] ?? '';
+        $voter_id  = $_POST['voter_id']  ?? '';
+
+        if ($voted_for !== '' && $voter_id !== '') {
             if (!isset($game['votes'])) {
                 $game['votes'] = [];
             }
-            $game['votes'][] = [
-                'voter' => $voter_id,
-                'voted_for' => $voted_for
-            ];
-            
-            // Vérifier si tous les votes sont en
-            if (count($game['votes']) >= count($game['players'])) {
-                // Compter les votes
-                $vote_count = [];
-                foreach ($game['votes'] as $vote) {
-                    $voted_for = $vote['voted_for'];
-                    $vote_count[$voted_for] = ($vote_count[$voted_for] ?? 0) + 1;
+
+            // Only allow one vote per player.
+            $already_voted = false;
+            foreach ($game['votes'] as $v) {
+                if ($v['voter'] === $voter_id) {
+                    $already_voted = true;
+                    break;
                 }
-                
+            }
+
+            if (!$already_voted) {
+                $game['votes'][] = ['voter' => $voter_id, 'voted_for' => $voted_for];
+            }
+
+            // Tally votes once everyone has voted.
+            $alive_count = count(array_filter($game['players'], fn($p) => !$p['eliminated']));
+            if (count($game['votes']) >= $alive_count) {
+                $vote_count = [];
+                foreach ($game['votes'] as $v) {
+                    $vid = $v['voted_for'];
+                    $vote_count[$vid] = ($vote_count[$vid] ?? 0) + 1;
+                }
+
+                // Eliminate the player with the most votes.
+                arsort($vote_count);
                 $eliminated_player = array_key_first($vote_count);
-                $game['players'][$eliminated_player]['eliminated'] = true;
-                $game['game_phase'] = 'round_end';
+
+                if ($eliminated_player !== null && isset($game['players'][$eliminated_player])) {
+                    $game['players'][$eliminated_player]['eliminated'] = true;
+                }
+                $game['game_phase']    = 'round_end';
                 $game['last_eliminated'] = $eliminated_player;
             }
         }
     }
-    
+
     if ($action === 'next_round') {
         $game['current_round']++;
-        $game['game_phase'] = 'playing';
+        $game['game_phase']           = 'playing';
         $game['current_player_index'] = 0;
-        $game['votes'] = [];
-        $game['phase_start_time'] = time();
-        
-        // Vérifier si le jeu est terminé
-        $check_game_end = check_game_end($game);
-        if ($check_game_end) {
+        $game['votes']                = [];
+        $game['phase_start_time']     = time();
+
+        // Reset per-round turn counters.
+        foreach ($game['turns_played'] as $pid => $_) {
+            $game['turns_played'][$pid] = 0;
+        }
+
+        $end = check_game_end($game);
+        if ($end) {
             $game['game_phase'] = 'game_end';
-            $game['winner'] = $check_game_end;
+            $game['winner']     = $end;
         }
     }
 }
 
-function check_game_end($game) {
-    $impostor = $game['players'][$game['impostor_id']];
+function check_game_end(array $game): ?string {
+    $impostor_id = $game['impostor_id'] ?? null;
+    if ($impostor_id === null || !isset($game['players'][$impostor_id])) {
+        return null;
+    }
+
+    $impostor      = $game['players'][$impostor_id];
     $alive_players = array_filter($game['players'], fn($p) => !$p['eliminated']);
-    
+
     if ($impostor['eliminated']) {
-        return 'citizens'; // Les citoyens ont gagné
+        return 'citizens';
     }
-    
+
     if (count($alive_players) <= 1) {
-        return 'impostor'; // L'imposteur a gagné
+        return 'impostor';
     }
-    
+
     return null;
 }
 
-// Récupérer les données du jeu
-$current_player_id = null;
-if (isset($game['turn_order'][$game['current_player_index'] ?? 0])) {
-    $current_player_id = $game['turn_order'][$game['current_player_index']];
-}
+// Derive display variables.
+$idx               = $game['current_player_index'] ?? 0;
+$current_player_id = $game['turn_order'][$idx] ?? null;
 $is_current_player = ($current_player_id === $player['id']);
-$is_impostor = (($game['impostor_id'] ?? null) === $player['id']);
-$game_code = substr($game_id, 5);
+$is_impostor       = (($game['impostor_id'] ?? null) === $player['id']);
+$game_code         = substr($game_id, 5);
 ?>
 <!DOCTYPE html>
 <html lang="fr">
@@ -190,7 +228,7 @@ $game_code = substr($game_id, 5);
                                     name="guess"
                                     class="input-field"
                                     placeholder="Dites 1 mot..."
-                                    maxlength="1"
+                                    maxlength="50"
                                     required
                                 >
                                 <button type="submit" class="btn btn-primary">Valider</button>

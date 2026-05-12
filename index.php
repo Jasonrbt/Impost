@@ -1,3 +1,3 @@
 <?php
-// Point d'entrée de l'application - redirige vers la page d'accueil
-require 'home.php';
+// Entry point — just load the home page.
+require __DIR__ . '/home.php';
