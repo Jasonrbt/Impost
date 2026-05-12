@@ -1,0 +1,25 @@
+# Sessions et cache
+*.sess
+sessions/
+tmp/
+cache/
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node (si utilisé)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Composer
+vendor/
+.env
+.env.local

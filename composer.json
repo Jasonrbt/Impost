@@ -1,0 +1,8 @@
+{
+    "name": "impost/qui-est-l-imposteur",
+    "description": "Une application web interactive pour jouer au jeu Qui est l'Imposteur? en ligne",
+    "license": "MIT",
+    "require": {
+        "php": ">=7.4"
+    }
+}
