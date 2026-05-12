@@ -3,6 +3,6 @@
     "description": "Une application web interactive pour jouer au jeu Qui est l'Imposteur? en ligne",
     "license": "MIT",
     "require": {
-        "php": "8.4"
+        "php": "^8.0"
     }
 }
